@@ -9,8 +9,10 @@
 import argparse
 
 def options():
-    """Construct the central argument parser, filled with useful defaults.
+    """_summary_
 
+    Returns:
+        _type_: _description_
     """
     parser = argparse.ArgumentParser(description='Argparser for main configuration settings')
     # File paths

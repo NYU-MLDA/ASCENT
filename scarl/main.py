@@ -13,9 +13,10 @@ import time
 from config import options
 from utilities import log
 import argparse
+from utilities import Logger
 
 
 if __name__ == '__main__':
-
     args = options().parse_args()
     yaml.load(args.params,Loader=yaml.FullLoader)
+    logFile = Logger(args)
