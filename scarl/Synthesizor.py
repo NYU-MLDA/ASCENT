@@ -6,30 +6,39 @@
 
 import numpy as np
 import torch
-import gym
+import gymnasium as gym
+from gymnasium import spaces
 import os,re
 import math
-from utilities import 
-from static_env import StaticEnv
+#from static_env import StaticEnv
 import abc_py as abcPy
 import os.path as osp
 import os,shutil
 from utilities import Logger
 from collections import OrderedDict
+import torch_geometric
+import torch_geometric.data
+from torch_geometric.utils.convert import to_networkx,from_networkx
+import networkx as nx
+from zipfile import ZipFile
+import zipfile
 
-class Synthesizor:
+class Synthesizor(gym.Env):
     def __init__(self, args,logFile):
+        super().__init__()
         self._abc = abcPy.AbcInterface()
         self._abc.start()
         self.verilog_file = args.file
         self.lib = args.lib
-        self.ep_length = args.params['NUM_LENGTH_EPISODES']
+        self.ep_length = args.params['NUM_LENGTH_RECIPE']
         self.root_dump_dir = args.dump
         self.logFile = logFile
         self.args = args
         self.aig_dump_dir = osp.join(self.root_dump_dir, 'aig_states')
         self.set_aig_node_type_mapping()
         self.generate_synthesis_id_2_cmd_mapping()
+        self.define_action_space()
+        
 
     def set_aig_node_type_mapping(self):
         self.aig_node_type = OrderedDict(\
@@ -99,6 +108,12 @@ class Synthesizor:
             synthesisCmd = self.generate_synthesis_cmd(synthesis_vec)
             f.write(synthesisCmd)
             f.write('amap'+endl+'topo'+endl+'stime -c'+endl+'buffer -c'+endl+'upsize -c'+endl+'dnsize -c')
+    
+    @staticmethod        
+    def get_area_from_synthesis_logfile(synthesis_logfile):
+        area_parsing_cmd = "grep 'Chip area for module' "+synthesis_logfile+" | awk -F':' '{print $2}' | awk '{$1=$1};1'"
+        area = float(os.popen(area_parsing_cmd).read().strip())
+        return area
         
     def checkFilePathsAndCreateAig(self):
         if not osp.exists(self.verilog_file):
@@ -130,6 +145,7 @@ class Synthesizor:
         yosysRunLogFile = osp.join(origSynthesisDir, "yosys_syn.log")
         yosys_synthesis_cmd = f'yosys -s {yosysScript} -l {yosysRunLogFile}'
         os.system(yosys_synthesis_cmd)
+        self.c2rs_area = self.get_area_from_synthesis_logfile(yosysRunLogFile)
         
         # Create the copy of original AIG file in aig dump folder
         self.origAIG = osp.join(self.aig_dump_dir, "orig_aig+0+step0.aig")
@@ -137,12 +153,39 @@ class Synthesizor:
         
         
     def init_state(self):
-        state = self.origAIG
+        aigState = self.origAIG
+        nxState = os.path.splitext(aigState)[0]+'.pt.zip'
+        if os.path.exists(nxState):
+            filePathName = osp.basename(osp.splitext(nxState)[0])
+            with ZipFile(nxState) as myzip:
+                with myzip.open(filePathName) as myfile:
+                    state = torch.load(myfile)
+        else:
+            state = self.extract_state_from_aig(aigState)
+            ptFilePath = nxState.split('.zip')[0]
+            torch.save(state,ptFilePath)
+            with ZipFile(nxState,'w',zipfile.ZIP_DEFLATED) as fzip:
+                fzip.write(ptFilePath,arcname=osp.basename(ptFilePath))
+            os.remove(ptFilePath)
         return state
+    
+    def reset(self, seed = None, options = None):
+        return 
         
     def define_action_space(self):
         self.action_set = self.synthesisId2CmdMapping.keys()
         self.n_actions = len(self.action_set)
+        self.action_space = spaces.Discrete(self.n_actions)
+        
+    def step(self, state, depth, action):
+        assert action in self.action_set
+        next_state = self.next_state(state,depth,action)
+        terminated = (depth+1) == self.ep_length
+        if terminated:
+            reward = self.get_reward(next_state)
+        else:
+            reward = 0.0
+        return next_state, reward, terminated, False, {}
         
     def next_state(self,current_state,action,depth):
         fileDirName = osp.dirname(current_state)
@@ -180,9 +223,38 @@ class Synthesizor:
         self._abc.write(nextState)
         return nextState
     
-    def extract_graph_state(self,state):
-        self._abc.read(state)
+    def get_reward(self,state):
+        _,prefix,_ = osp.splitext(osp.basename(state))[0].split("+")
+        rl_synthesisVec = re.findall(['0-9+'],prefix)[1:] # The first one is always 0
+        
+        # Create appropriate file and scripts paths to extract original AIG
+        rewardSynthesisDir = osp.join(self.root_dump_dir, "reward_synthesis")
+        abcScript = osp.join(rewardSynthesisDir, "abc.script")
+        yosysScript = osp.join(rewardSynthesisDir, "yosys_script.tcl")
+        synthesizedVerilogNetlist = osp.join(rewardSynthesisDir, "synthesized_netlist.v")
+        
+        
+        # create the scripts file
+        self.create_yosys_script_file(yosysScript, abcScript,synthesizedVerilogNetlist)
+        self.create_abc_script_file(abcScript,rl_synthesisVec)
+        
+        # Run the synthesis and gather the number
+        yosysRunLogFile = osp.join(rewardSynthesisDir, "yosys_syn.log")
+        yosys_synthesis_cmd = f'yosys -s {yosysScript} -l {yosysRunLogFile}'
+        os.system(yosys_synthesis_cmd)
+        area = self.get_area_from_synthesis_logfile(yosysRunLogFile)
+        reward = max(-1,(1-(area/self.c2rs_area)))
+        return reward
+    
+    def extract_state_from_aig(self,aigState):
+        fileBaseName = os.path.splitext(os.path.basename(aigState))[0]
+        _,seq,stepNum = fileBaseName.split('+')
+        stepNum = int(stepNum.split('step')[-1])
+        recipe_encoding = [int(x) for x in seq]
+        
+        self._abc.read(aigState)
         data = {}
+        aigGraph = nx.DiGraph()
         numNodes = self._abc.numNodes()
         data['node_type'] = np.zeros(numNodes,dtype=int)
         data['num_inverted_predecessors'] = np.zeros(numNodes,dtype=int)
@@ -219,6 +291,8 @@ class Synthesizor:
                     edge_type.append(0)
                 else:
                     edge_type.append(1)
+            aigGraph.add_node(nodeIdx,node_type=data['node_type'][nodeIdx],num_inverted_predecessors=data['num_inverted_predecessors'][nodeIdx])
+                      
         data['edge_index'] = torch.tensor([edge_src_index,edge_target_index],dtype=torch.long)
         data['node_type'] = torch.tensor(data['node_type'])
         data['num_inverted_predecessors'] = torch.tensor(data['num_inverted_predecessors'])
@@ -226,4 +300,8 @@ class Synthesizor:
         #data = torch_geometric.data.Data.from_dict(data)
         #data.num_nodes = numNodes
         data['nodes'] = numNodes
-        return data
+        for idx,src,target in enumerate(zip(edge_src_index,edge_target_index)):
+            aigGraph.add_edge(src,target,edge_logic=edge_type[idx])
+        aigGraph.graph['recipe_len'] = stepNum
+        aigGraph.graph['recipe_encoding'] = recipe_encoding
+        return aigGraph
