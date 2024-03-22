@@ -73,6 +73,7 @@ class Synthesizor(gym.Env):
     
     def generate_synthesis_cmd(self,synthesis_vec):
         endl = "\n"
+        synthesisCmd=""
         for i in synthesis_vec:
             synthesisCmd += (self.synthesisId2CmdMapping[int(math.floor(i))]+endl)
         return synthesisCmd
@@ -93,7 +94,7 @@ class Synthesizor(gym.Env):
             #Write the dfflibmap command to the file
             f.write('dfflibmap -liberty '+self.lib+endl)
             #Write the abc command to the file
-            f.write('abc -liberty '+self.lib+' -script'+abc_script+endl)
+            f.write('abc -liberty '+self.lib+' -script '+abc_script+endl)
             #Write the write_verilog command to the file
             f.write('write_verilog -noattr '+synthesized_file_path+endl)
             #Write the stat command to the file
@@ -112,6 +113,7 @@ class Synthesizor(gym.Env):
     @staticmethod        
     def get_area_from_synthesis_logfile(synthesis_logfile):
         area_parsing_cmd = "grep 'Chip area for module' "+synthesis_logfile+" | awk -F':' '{print $2}' | awk '{$1=$1};1'"
+        print(os.popen(area_parsing_cmd).read().strip())
         area = float(os.popen(area_parsing_cmd).read().strip())
         return area
         
@@ -130,6 +132,9 @@ class Synthesizor(gym.Env):
 
         # Create appropriate file and scripts paths to extract original AIG
         origSynthesisDir = osp.join(self.root_dump_dir, "orig_synthesis")
+        if osp.exists(origSynthesisDir):
+            shutil.rmtree(origSynthesisDir)
+        os.mkdir(origSynthesisDir)
         abcScript = osp.join(origSynthesisDir, "abc.script")
         yosysScript = osp.join(origSynthesisDir, "yosys_script.tcl")
         synthesizedVerilogNetlist = osp.join(origSynthesisDir, "synthesized_netlist.v")
@@ -143,17 +148,19 @@ class Synthesizor(gym.Env):
         
         # Generate the original AIG file
         yosysRunLogFile = osp.join(origSynthesisDir, "yosys_syn.log")
-        yosys_synthesis_cmd = f'yosys -s {yosysScript} -l {yosysRunLogFile}'
+        yosys_synthesis_cmd = f'yosys -s {yosysScript} -l {yosysRunLogFile} > /dev/null 2>&1'
         os.system(yosys_synthesis_cmd)
         self.c2rs_area = self.get_area_from_synthesis_logfile(yosysRunLogFile)
         
         # Create the copy of original AIG file in aig dump folder
+        if osp.exists(self.aig_dump_dir):
+            shutil.rmtree(self.aig_dump_dir)
+        os.mkdir(self.aig_dump_dir)
         self.origAIG = osp.join(self.aig_dump_dir, "orig_aig+0+step0.aig")
         shutil.copy(origAIGPath, self.origAIG)
         
         
-    def init_state(self):
-        aigState = self.origAIG
+    def get_state_from_aig(self,aigState):
         nxState = os.path.splitext(aigState)[0]+'.pt.zip'
         if os.path.exists(nxState):
             filePathName = osp.basename(osp.splitext(nxState)[0])
@@ -168,30 +175,58 @@ class Synthesizor(gym.Env):
                 fzip.write(ptFilePath,arcname=osp.basename(ptFilePath))
             os.remove(ptFilePath)
         return state
+        
+        
+    def init_state(self):
+        aigState = self.origAIG
+        self.state = self.get_state_from_aig(aigState)
+        self.depth = 0
     
     def reset(self, seed = None, options = None):
-        return 
+        super().reset(seed=seed)
+        return self.init_state(),{}
+    
+    def render(self):
+        return super().render()
+
+    def close(self):
+        return super().close()
         
     def define_action_space(self):
         self.action_set = self.synthesisId2CmdMapping.keys()
         self.n_actions = len(self.action_set)
         self.action_space = spaces.Discrete(self.n_actions)
         
-    def step(self, state, depth, action):
+    def step(self,action):
         assert action in self.action_set
-        next_state = self.next_state(state,depth,action)
-        terminated = (depth+1) == self.ep_length
+        next_state = self.next_state(action)
+        self.state = next_state
+        self.depth += 1
+        terminated = self.depth == self.ep_length
         if terminated:
             reward = self.get_reward(next_state)
         else:
             reward = 0.0
         return next_state, reward, terminated, False, {}
         
-    def next_state(self,current_state,action,depth):
-        fileDirName = osp.dirname(current_state)
-        fileBaseName,prefix,_ = osp.splitext(osp.basename(current_state))[0].split("+")
-        nextState = os.path.join(fileDirName,fileBaseName+"+"+prefix+str(action)+"+step"+str(depth+1)+".aig")
-        self._abc.read(current_state)
+    def next_state(self,action):
+        """_summary_
+        Args:
+            state (nx.DiGraph): AIG encoded as NetworkX DiGraph
+            action (_type_): ABC synthesis action
+            depth (_type_): Current depth of synthesis recipe
+
+        Returns:
+            state: Synthesized AIG after applying the synthesis transformation
+        """
+        # Hack to get the aig state from networkx graph object.
+        # Turn it to pytorch data dictionary if using pytorch object as state
+        current_aig_state = self.state.graph['aig_state'] 
+        fileDirName = osp.dirname(current_aig_state)
+        fileBaseName,prefix,stepNum = osp.splitext(osp.basename(current_aig_state))[0].split("+")
+        depth = int(stepNum.split('step')[-1])+1
+        next_aig_state = os.path.join(fileDirName,fileBaseName+"+"+prefix+"_"+str(action)+"+step"+str(depth)+".aig")
+        self._abc.read(current_aig_state)
         if action == 0:
             self._abc.refactor(l=False, z=False) #rf
         elif action == 1:
@@ -220,15 +255,33 @@ class Synthesizor(gym.Env):
             self._abc.balance(l=False) #balance
         else:
             assert(False)
-        self._abc.write(nextState)
+        self._abc.write(next_aig_state)
+        nextState = self.get_state_from_aig(next_aig_state)
         return nextState
     
     def get_reward(self,state):
+        """_summary_
+
+        Args:
+            state (nxDigraph): The function expects the state information in the form of AIG DiGraph
+            or PyG Geometric Data dictionary. Use "aig_state" attribute to retrieve the path of terminal
+            state AIG, extract the recipe to write down the abc.script.
+
+        Returns:
+            float : The reward should be designed on post synthesized verilog file. e.g. area, PT score etc.
+        """
+        if isinstance(state,nx.DiGraph):
+            state = state.graph['aig_state']
+        else:
+            print("Instance type unknown. Exiting")
+            exit(1)
         _,prefix,_ = osp.splitext(osp.basename(state))[0].split("+")
-        rl_synthesisVec = re.findall(['0-9+'],prefix)[1:] # The first one is always 0
+        rl_synthesisVec = [int(synthid) for synthid in prefix.split("_")[1:]] # The first one is always 0
         
         # Create appropriate file and scripts paths to extract original AIG
         rewardSynthesisDir = osp.join(self.root_dump_dir, "reward_synthesis")
+        if not osp.exists(rewardSynthesisDir):
+            os.mkdir(rewardSynthesisDir)
         abcScript = osp.join(rewardSynthesisDir, "abc.script")
         yosysScript = osp.join(rewardSynthesisDir, "yosys_script.tcl")
         synthesizedVerilogNetlist = osp.join(rewardSynthesisDir, "synthesized_netlist.v")
@@ -240,7 +293,7 @@ class Synthesizor(gym.Env):
         
         # Run the synthesis and gather the number
         yosysRunLogFile = osp.join(rewardSynthesisDir, "yosys_syn.log")
-        yosys_synthesis_cmd = f'yosys -s {yosysScript} -l {yosysRunLogFile}'
+        yosys_synthesis_cmd = f'yosys -s {yosysScript} -l {yosysRunLogFile} > /dev/null 2>&1'
         os.system(yosys_synthesis_cmd)
         area = self.get_area_from_synthesis_logfile(yosysRunLogFile)
         reward = max(-1,(1-(area/self.c2rs_area)))
@@ -250,7 +303,7 @@ class Synthesizor(gym.Env):
         fileBaseName = os.path.splitext(os.path.basename(aigState))[0]
         _,seq,stepNum = fileBaseName.split('+')
         stepNum = int(stepNum.split('step')[-1])
-        recipe_encoding = [int(x) for x in seq]
+        recipe_encoding = [int(x) for x in seq.split("_")[1:]]
         
         self._abc.read(aigState)
         data = {}
@@ -300,8 +353,43 @@ class Synthesizor(gym.Env):
         #data = torch_geometric.data.Data.from_dict(data)
         #data.num_nodes = numNodes
         data['nodes'] = numNodes
-        for idx,src,target in enumerate(zip(edge_src_index,edge_target_index)):
+        for idx,(src,target) in enumerate(zip(edge_src_index,edge_target_index)):
             aigGraph.add_edge(src,target,edge_logic=edge_type[idx])
         aigGraph.graph['recipe_len'] = stepNum
         aigGraph.graph['recipe_encoding'] = recipe_encoding
+        aigGraph.graph['aig_state'] = aigState
         return aigGraph
+
+class dictStruct:
+    def __init__(self, dictObj):
+        self.__dict__.update(dictObj)
+
+#   Test logic synthesis environment
+if __name__ == '__main__':
+    run_params = {
+        "NUM_LENGTH_RECIPE":18,
+        "TOP_MODULE_NAME": 'aes128_table_ecb'
+    }
+    args = {
+        'file': "/home/jb7410/scarl_home/data/aes128_table_ecb_mod.v",
+        'lib': "/home/jb7410/scarl_home/data/merge.lib",
+        'dump':"/home/jb7410/scarl_home/dump/trial1",
+        'params':run_params
+    }
+
+    argObj = dictStruct(args)
+    logfile = "/home/jb7410/scarl_home/dump/trial1"
+    synthObj = Synthesizor(argObj,logfile)
+    synthObj.checkFilePathsAndCreateAig()
+    obs, _ = synthObj.reset()
+    done = False
+    n_steps = 0
+    while not done:
+        # Take random actions
+        random_action = synthObj.action_space.sample()
+        obs, reward, terminated, truncated, info = synthObj.step(random_action)
+        done = terminated or truncated
+        print(reward, terminated, truncated, info,done)
+        n_steps += 1
+
+    print(n_steps, info)
