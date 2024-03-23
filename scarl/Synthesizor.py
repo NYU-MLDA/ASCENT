@@ -22,6 +22,7 @@ from torch_geometric.utils.convert import to_networkx,from_networkx
 import networkx as nx
 from zipfile import ZipFile
 import zipfile
+from gymnasium.spaces import Dict
 
 class Synthesizor(gym.Env):
     def __init__(self, args,logFile):
@@ -272,6 +273,8 @@ class Synthesizor(gym.Env):
         """
         if isinstance(state,nx.DiGraph):
             state = state.graph['aig_state']
+        elif isinstance(state,dict):
+            state = state['aig_state']
         else:
             print("Instance type unknown. Exiting")
             exit(1)
@@ -349,16 +352,20 @@ class Synthesizor(gym.Env):
         data['edge_index'] = torch.tensor([edge_src_index,edge_target_index],dtype=torch.long)
         data['node_type'] = torch.tensor(data['node_type'])
         data['num_inverted_predecessors'] = torch.tensor(data['num_inverted_predecessors'])
+        data['x'] = torch.stack((data['node_type'],data['num_inverted_predecessors']),dim=0).T
         data['edge_attr'] = torch.tensor(np.array(edge_type).reshape(-1,1))
         #data = torch_geometric.data.Data.from_dict(data)
         #data.num_nodes = numNodes
         data['nodes'] = numNodes
+        data['recipe_len'] = stepNum
+        data['recipe_encoding'] = recipe_encoding
+        data['aig_state'] = aigState
         for idx,(src,target) in enumerate(zip(edge_src_index,edge_target_index)):
             aigGraph.add_edge(src,target,edge_logic=edge_type[idx])
         aigGraph.graph['recipe_len'] = stepNum
         aigGraph.graph['recipe_encoding'] = recipe_encoding
         aigGraph.graph['aig_state'] = aigState
-        return aigGraph
+        return data
 
 class dictStruct:
     def __init__(self, dictObj):
