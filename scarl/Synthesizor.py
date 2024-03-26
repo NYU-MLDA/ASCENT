@@ -10,7 +10,6 @@ import gymnasium as gym
 from gymnasium import spaces
 import os,re
 import math
-#from static_env import StaticEnv
 import abc_py as abcPy
 import os.path as osp
 import os,shutil

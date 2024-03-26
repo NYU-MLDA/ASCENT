@@ -7,7 +7,6 @@
 # Modified Stable-baseline-3 RL benchmarking codes to support Pytorch-geometric based data structures and GNN encodings
 
 import collections
-import copy
 import warnings
 from abc import ABC, abstractmethod
 from functools import partial
@@ -31,16 +30,10 @@ from stable_baselines3.common.distributions import (
 )
 from stable_baselines3.common.preprocessing import get_action_dim, is_image_space, maybe_transpose, preprocess_obs
 from stable_baselines3.common.torch_layers import (
-    BaseFeaturesExtractor,
-    CombinedExtractor,
-    FlattenExtractor,
     MlpExtractor,
-    NatureCNN,
-    create_mlp,
 )
-#from stable_baselines3.common.type_aliases import PyTorchObs, Schedule
 from stable_baselines3.common.type_aliases import Schedule
-from stable_baselines3.common.utils import get_device #, is_vectorized_observation, obs_as_tensor
+from stable_baselines3.common.utils import get_device
 from aig_feature_extractor import AIGStateEncoder
 
 SelfBaseModel = TypeVar("SelfBaseModel", bound="BaseModel")
