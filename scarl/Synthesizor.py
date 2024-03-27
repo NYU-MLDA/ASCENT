@@ -221,7 +221,13 @@ class Synthesizor(gym.Env):
         """
         # Hack to get the aig state from networkx graph object.
         # Turn it to pytorch data dictionary if using pytorch object as state
-        current_aig_state = self.state.graph['aig_state'] 
+        if isinstance(self.state,nx.DiGraph):
+            current_aig_state = self.state.graph['aig_state']
+        elif isinstance(self.state,dict):
+            current_aig_state = self.state['aig_state']
+        else:
+            print("Instance type unknown. Exiting")
+            exit(1)
         fileDirName = osp.dirname(current_aig_state)
         fileBaseName,prefix,stepNum = osp.splitext(osp.basename(current_aig_state))[0].split("+")
         depth = int(stepNum.split('step')[-1])+1
