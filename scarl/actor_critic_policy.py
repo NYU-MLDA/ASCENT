@@ -631,7 +631,7 @@ class ActorCriticPolicy(BasePolicy):
         :param obs:
         :return: the action distribution.
         """
-        features = super().extract_features(dict_observation)
+        features = super().extract_features(dict_observation, self.pi_features_extractor)
         latent_pi = self.mlp_extractor.forward_actor(features)
         return self._get_action_dist_from_latent(latent_pi)
 
@@ -642,6 +642,6 @@ class ActorCriticPolicy(BasePolicy):
         :param obs: Observation
         :return: the estimated values.
         """
-        features = super().extract_features(dict_observation)
+        features = super().extract_features(dict_observation, self.vf_features_extractor)
         latent_vf = self.mlp_extractor.forward_critic(features)
         return self.value_net(latent_vf)
