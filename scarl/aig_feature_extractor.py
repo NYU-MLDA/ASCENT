@@ -37,7 +37,7 @@ class NodeEncoder(torch.nn.Module):
         return x_embedding
 
 class AIGStateEncoder(torch.nn.Module):
-    def __init__(self,node_encoder_out_channels,hidden_channels):
+    def __init__(self,node_encoder_out_channels=4,hidden_channels=16):
         super().__init__()
 
         self.node_encoder = NodeEncoder()
@@ -47,16 +47,19 @@ class AIGStateEncoder(torch.nn.Module):
         self.norm1 = BatchNorm(hidden_channels)
         self.norm2 = BatchNorm(hidden_channels)
         # Use a global sort aggregation:
-        self.global_pool_1 = aggr.MLPAggregation(hidden_channels,hidden_channels)
+        self.global_pool_1 = aggr.MLPAggregation(hidden_channels,hidden_channels,max_num_elements=500,num_layers=1)
         self.global_pool_2 = aggr.GRUAggregation(hidden_channels,hidden_channels)
-        self.global_pool_3 = aggr.SetTransformerAggregation(hidden_channels,hidden_channels)
+        self.global_pool_3 = aggr.SetTransformerAggregation(hidden_channels,num_seed_points=1,heads=1)
         self.linear_layer = torch.nn.Linear(hidden_channels*3, hidden_channels*3)
         self.features_dim = hidden_channels*3
 
-    def foward(self, x, edge_index, batch):
+    def forward(self,batched_data):
+        x = batched_data.x
+        edge_index = batched_data.edge_index
+        batch = batched_data.batch
         x = self.node_encoder(x)
         x = F.relu(self.conv1(x, edge_index))
         x = F.relu(self.conv2(x, edge_index))
-        pooled_feature = torch.cat([self.global_pool(x, batch),self.global_pool_2(x,batch),self.global_pool_3(x,batch)],dim=1)
-        graph_feature = self.classifier(pooled_feature)
+        pooled_feature = torch.cat([self.global_pool_1(x, batch),self.global_pool_2(x,batch),self.global_pool_3(x,batch)],dim=1)
+        graph_feature = self.linear_layer(pooled_feature)
         return graph_feature

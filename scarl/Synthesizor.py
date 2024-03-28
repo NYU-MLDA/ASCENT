@@ -24,7 +24,7 @@ import zipfile
 from gymnasium.spaces import Dict
 
 class Synthesizor(gym.Env):
-    def __init__(self, args,logFile):
+    def __init__(self, args):
         super().__init__()
         self._abc = abcPy.AbcInterface()
         self._abc.start()
@@ -32,7 +32,7 @@ class Synthesizor(gym.Env):
         self.lib = args.lib
         self.ep_length = args.params['NUM_LENGTH_RECIPE']
         self.root_dump_dir = args.dump
-        self.logFile = logFile
+        self.logFile = Logger(args,"synthesizor.log")
         self.args = args
         self.aig_dump_dir = osp.join(self.root_dump_dir, 'aig_states')
         self.set_aig_node_type_mapping()
@@ -390,8 +390,8 @@ if __name__ == '__main__':
     }
 
     argObj = dictStruct(args)
-    logfile = "/home/jb7410/scarl_home/dump/trial1"
-    synthObj = Synthesizor(argObj,logfile)
+    #logfile = "/home/jb7410/scarl_home/dump/trial1"
+    synthObj = Synthesizor(argObj)
     synthObj.checkFilePathsAndCreateAig()
     obs, _ = synthObj.reset()
     done = False

@@ -66,6 +66,7 @@ class BaseModel(nn.Module):
     def __init__(
         self,
         action_space: spaces.Space,
+        feature_extractor_class: AIGStateEncoder,
         optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -75,7 +76,7 @@ class BaseModel(nn.Module):
             optimizer_kwargs = {}
 
         self.action_space = action_space
-        self.features_extractor = self.make_features_extractor()
+        self.feature_extractor_class = feature_extractor_class
 
         self.optimizer_class = optimizer_class
         self.optimizer_kwargs = optimizer_kwargs
@@ -83,10 +84,10 @@ class BaseModel(nn.Module):
 
     def make_features_extractor(self) -> th.nn.Module:
         """Helper method to create a features extractor."""
-        #return self.features_extractor_class(self.observation_space, **self.features_extractor_kwargs)
-        return AIGStateEncoder()
+        return self.feature_extractor_class()
+        #return AIGStateEncoder()
 
-    def extract_features(self, dict_observation) -> th.Tensor:
+    def extract_features(self, dict_observation,features_extractor) -> th.Tensor:
         """
         Preprocess the observation if needed and extract features.
 
@@ -97,7 +98,8 @@ class BaseModel(nn.Module):
         #preprocessed_obs = preprocess_obs(obs, self.observation_space, normalize_images=self.normalize_images)
         # Write up the code for taking in PyG object and run the AigEncoder
         pyg_data = self.dict_to_pyg(dict_observation)
-        return self.features_extractor(pyg_data)
+        #return self.features_extractor(pyg_data)
+        return features_extractor(pyg_data)
 
     def _get_constructor_parameters(self) -> Dict[str, Any]:
         """
@@ -109,7 +111,7 @@ class BaseModel(nn.Module):
             action_space=self.action_space,
             # Passed to the constructor by child class
             # squash_output=self.squash_output,
-            features_extractor=self.features_extractor
+            # features_extractor=self.features_extractor
             #normalize_images=self.normalize_images,
         )
 
@@ -191,6 +193,7 @@ class BaseModel(nn.Module):
         numNodes = observation['nodes']
         data = torch_geometric.data.Data.from_dict(observation)
         data.num_nodes = numNodes
+        data.sort() # Since we are using permutation variant readouts.
 
         data = data.to(self.device)
         return data
@@ -356,6 +359,7 @@ class ActorCriticPolicy(BasePolicy):
         use_expln: bool = False,
         squash_output: bool = False,
         share_features_extractor: bool = True,
+        feature_extractor_class = AIGStateEncoder,
         optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
     ):
@@ -367,6 +371,7 @@ class ActorCriticPolicy(BasePolicy):
 
         super().__init__(
             action_space,
+            feature_extractor_class = feature_extractor_class,
             optimizer_class=optimizer_class,
             optimizer_kwargs=optimizer_kwargs,
             squash_output=squash_output,
@@ -437,6 +442,7 @@ class ActorCriticPolicy(BasePolicy):
                 use_expln=default_none_kwargs["use_expln"],
                 lr_schedule=self._dummy_schedule,  # dummy lr schedule, not needed for loading policy alone
                 ortho_init=self.ortho_init,
+                feature_extractor_class=self.feature_extractor_class,
                 optimizer_class=self.optimizer_class,
                 optimizer_kwargs=self.optimizer_kwargs,
             )
@@ -625,7 +631,7 @@ class ActorCriticPolicy(BasePolicy):
         :param obs:
         :return: the action distribution.
         """
-        features = super().extract_features(dict_observation, self.pi_features_extractor)
+        features = super().extract_features(dict_observation)
         latent_pi = self.mlp_extractor.forward_actor(features)
         return self._get_action_dist_from_latent(latent_pi)
 
@@ -636,6 +642,6 @@ class ActorCriticPolicy(BasePolicy):
         :param obs: Observation
         :return: the estimated values.
         """
-        features = super().extract_features(dict_observation, self.vf_features_extractor)
+        features = super().extract_features(dict_observation)
         latent_vf = self.mlp_extractor.forward_critic(features)
         return self.value_net(latent_vf)
