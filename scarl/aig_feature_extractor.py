@@ -58,8 +58,8 @@ class AIGStateEncoder(torch.nn.Module):
         edge_index = batched_data.edge_index
         batch = batched_data.batch
         x = self.node_encoder(x)
-        x = F.relu(self.conv1(x, edge_index))
-        x = F.relu(self.conv2(x, edge_index))
+        x = F.relu(self.norm1(self.conv1(x, edge_index)))
+        x = F.relu(self.norm2(self.conv2(x, edge_index)))
         pooled_feature = torch.cat([self.global_pool_1(x, batch),self.global_pool_2(x,batch),self.global_pool_3(x,batch)],dim=1)
         graph_feature = self.linear_layer(pooled_feature)
         return graph_feature
