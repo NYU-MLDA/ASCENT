@@ -423,7 +423,7 @@ class BaseAlgorithm(ABC):
         observation: Dict,
         state: Optional[Tuple[np.ndarray, ...]] = None,
         episode_start: Optional[np.ndarray] = None,
-        deterministic: bool = False,
+        deterministic: bool = True,
     ) -> Tuple[np.ndarray, Optional[Tuple[np.ndarray, ...]]]:
         """
         Get the policy action from an observation (and optional hidden state).
@@ -448,7 +448,14 @@ class BaseAlgorithm(ABC):
         :param seed:
         """
         if seed is None:
-            return
+            return                                
+        th.manual_seed(seed)
+        np.random.seed(seed)
+        if th.cuda.is_available():
+            th.cuda.manual_seed(seed)                                                   
+            th.cuda.manual_seed_all(seed)                                             
+            th.backends.cudnn.deterministic = True
+            th.backends.cudnn.benchmark = False  
         set_random_seed(seed, using_cuda=self.device.type == th.device("cuda").type)
         self.action_space.seed(seed)
         # self.env is always a VecEnv
@@ -906,7 +913,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                     clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
 
             new_obs, reward, done, truncated, info = env.step(clipped_actions[0]) # Assuming our environment will take one value, so 0th index
-            print(reward,done,n_steps)
+            #print(reward,done,n_steps)
 
             self.num_timesteps += 1
 

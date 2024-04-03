@@ -236,7 +236,7 @@ class BasePolicy(BaseModel, ABC):
                 module.bias.data.fill_(0.0)
 
     @abstractmethod
-    def _predict(self, pyg_observation: Data, deterministic: bool = False) -> th.Tensor:
+    def _predict(self, pyg_observation: Data, deterministic: bool = True) -> th.Tensor:
         """
         Get the action according to the policy for a given observation.
 
@@ -253,7 +253,7 @@ class BasePolicy(BaseModel, ABC):
         dict_observation: Dict,
         state: Optional[Tuple[np.ndarray, ...]] = None,
         episode_start: Optional[np.ndarray] = None,
-        deterministic: bool = False,
+        deterministic: bool = True,
     ) -> Tuple[np.ndarray, Optional[Tuple[np.ndarray, ...]]]:
         """
         Get the policy action from an observation (and optional hidden state).
@@ -286,6 +286,7 @@ class BasePolicy(BaseModel, ABC):
 
         with th.no_grad():
             actions = self._predict(pyg_data, deterministic=deterministic)
+        #print(actions)
         # Convert to numpy, and reshape to the original action shape
         actions = actions.cpu().numpy().reshape((-1, *self.action_space.shape))  # type: ignore[misc]
 
@@ -524,7 +525,7 @@ class ActorCriticPolicy(BasePolicy):
         # Setup optimizer with initial learning rate
         self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)  # type: ignore[call-arg]
 
-    def forward(self, dict_observation: dict, deterministic: bool = False) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
+    def forward(self, dict_observation: dict, deterministic: bool = True) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
         """
         Forward pass in all the networks (actor and critic)
 
@@ -573,7 +574,6 @@ class ActorCriticPolicy(BasePolicy):
         :return: Action distribution
         """
         mean_actions = self.action_net(latent_pi)
-
         if isinstance(self.action_dist, DiagGaussianDistribution):
             return self.action_dist.proba_distribution(mean_actions, self.log_std)
         elif isinstance(self.action_dist, CategoricalDistribution):
@@ -590,7 +590,7 @@ class ActorCriticPolicy(BasePolicy):
         else:
             raise ValueError("Invalid action distribution")
 
-    def _predict(self, pyg_observation: Data, deterministic: bool = False) -> th.Tensor:
+    def _predict(self, pyg_observation: Data, deterministic: bool = True) -> th.Tensor:
         """
         Get the action according to the policy for a given observation.
 

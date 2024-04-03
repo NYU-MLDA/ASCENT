@@ -38,6 +38,7 @@ class Synthesizor(gym.Env):
         self.set_aig_node_type_mapping()
         self.generate_synthesis_id_2_cmd_mapping()
         self.define_action_space()
+        self.num_envs=1 # Tackle VecEnv num_envs dummy
         
 
     def set_aig_node_type_mapping(self):
