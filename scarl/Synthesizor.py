@@ -181,6 +181,7 @@ class Synthesizor(gym.Env):
         aigState = self.origAIG
         self.state = self.get_state_from_aig(aigState)
         self.depth = 0
+        return self.state
     
     def reset(self, seed = None, options = None):
         super().reset(seed=seed)

@@ -6,8 +6,10 @@ import torch as th
 from gymnasium import spaces
 from torch.nn import functional as F
 
-from stable_baselines3.common.buffers import RolloutBuffer
-from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
+#from stable_baselines3.common.buffers import RolloutBuffer
+#from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
+from buffers import RolloutBuffer
+from on_policy_algorithm import OnPolicyAlgorithm
 from actor_critic_policy import ActorCriticPolicy,BasePolicy
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
 from stable_baselines3.common.utils import explained_variance, get_schedule_fn
@@ -80,14 +82,14 @@ class PPO(OnPolicyAlgorithm):
         policy: Union[str, Type[ActorCriticPolicy]],
         env: Union[GymEnv, str],
         learning_rate: Union[float, Schedule] = 3e-4,
-        n_steps: int = 900,
-        batch_size: int = 2,
+        n_steps: int = 18, # Rollout should be of Depth 18. Each epoch have 18 samples to train on. timesteps = 900, so 50 epochs training.
+        batch_size: int = 1,
         n_epochs: int = 10,
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
         clip_range: Union[float, Schedule] = 0.2,
         clip_range_vf: Union[None, float, Schedule] = None,
-        normalize_advantage: bool = True,
+        normalize_advantage: bool = False,   # Normalize advantage is false as batchsize is set 1 now.
         ent_coef: float = 0.0,
         vf_coef: float = 0.5,
         max_grad_norm: float = 0.5,
@@ -143,7 +145,7 @@ class PPO(OnPolicyAlgorithm):
         if self.env is not None:
             # Check that `n_steps * n_envs > 1` to avoid NaN
             # when doing advantage normalization
-            buffer_size = self.env.num_envs * self.n_steps
+            buffer_size = 1 * self.n_steps
             assert buffer_size > 1 or (
                 not normalize_advantage
             ), f"`n_steps * n_envs` must be greater than 1. Currently n_steps={self.n_steps} and n_envs={self.env.num_envs}"
@@ -212,6 +214,7 @@ class PPO(OnPolicyAlgorithm):
                 if self.use_sde:
                     self.policy.reset_noise(self.batch_size)
 
+                print(rollout_data.observations,actions)
                 values, log_prob, entropy = self.policy.evaluate_actions(rollout_data.observations, actions)
                 values = values.flatten()
                 # Normalize advantage

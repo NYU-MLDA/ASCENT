@@ -42,7 +42,7 @@ from stable_baselines3.common.vec_env import (
 )
 from stable_baselines3.common.vec_env.patch_gym import _convert_space, _patch_env
 from stable_baselines3.common.utils import obs_as_tensor, safe_mean
-from stable_baselines3.common.buffers import DictRolloutBuffer, RolloutBuffer
+from buffers import RolloutBuffer
 from stable_baselines3.common.callbacks import BaseCallback
 from actor_critic_policy import ActorCriticPolicy
 
@@ -50,25 +50,6 @@ from actor_critic_policy import ActorCriticPolicy
 
 SelfBaseAlgorithm = TypeVar("SelfBaseAlgorithm", bound="BaseAlgorithm")
 SelfOnPolicyAlgorithm = TypeVar("SelfOnPolicyAlgorithm", bound="OnPolicyAlgorithm")
-
-
-def maybe_make_env(env: Union[GymEnv, str], verbose: int) -> GymEnv:
-    """If env is a string, make the environment; otherwise, return env.
-
-    :param env: The environment to learn from.
-    :param verbose: Verbosity level: 0 for no output, 1 for indicating if envrironment is created
-    :return A Gym (vector) environment.
-    """
-    if isinstance(env, str):
-        env_id = env
-        if verbose >= 1:
-            print(f"Creating environment from the given name '{env_id}'")
-        # Set render_mode to `rgb_array` as default, so we can record video
-        try:
-            env = gym.make(env_id, render_mode="rgb_array")
-        except TypeError:
-            env = gym.make(env_id)
-    return env
 
 
 class BaseAlgorithm(ABC):
@@ -104,7 +85,6 @@ class BaseAlgorithm(ABC):
     # Policy aliases (see _get_policy_from_name())
     policy_aliases: ClassVar[Dict[str, Type[BasePolicy]]] = {}
     policy: BasePolicy
-    observation_space: spaces.Space
     action_space: spaces.Space
     n_envs: int
     lr_schedule: Schedule
@@ -120,7 +100,6 @@ class BaseAlgorithm(ABC):
         tensorboard_log: Optional[str] = None,
         verbose: int = 0,
         device: Union[th.device, str] = "auto",
-        support_multi_env: bool = False,
         monitor_wrapper: bool = True,
         seed: Optional[int] = None,
         use_sde: bool = False,
@@ -168,36 +147,17 @@ class BaseAlgorithm(ABC):
         self._n_updates = 0  # type: int
         # Whether the user passed a custom logger or not
         self._custom_logger = False
-        self.env: Optional[VecEnv] = None
-        self._vec_normalize_env: Optional[VecNormalize] = None
+        self.env: Optional[GymEnv] = None
 
         # Create and wrap the env if needed
         if env is not None:
-            env = maybe_make_env(env, self.verbose)
+            #env = maybe_make_env(env, self.verbose)
             #env = self._wrap_env(env, self.verbose, monitor_wrapper)
 
             #self.observation_space = env.observation_space
             self.action_space = env.action_space
             self.n_envs = 1
             self.env = env
-
-            # get VecNormalize object if needed
-            # self._vec_normalize_env = unwrap_vec_normalize(env)
-
-            # if supported_action_spaces is not None:
-            #     assert isinstance(self.action_space, supported_action_spaces), (
-            #         f"The algorithm only supports {supported_action_spaces} as action spaces "
-            #         f"but {self.action_space} was provided"
-            #     )
-
-            # if not support_multi_env and self.n_envs > 1:
-            #     raise ValueError(
-            #         "Error: the model does not support multiple envs; it requires " "a single vectorized environment."
-            #     )
-
-            # # Catch common mistake: using MlpPolicy/CnnPolicy instead of MultiInputPolicy
-            # if policy in ["MlpPolicy", "CnnPolicy"] and isinstance(self.observation_space, spaces.Dict):
-            #     raise ValueError(f"You must use `MultiInputPolicy` when working with dict observation space, not {policy}")
 
             if self.use_sde and not isinstance(self.action_space, spaces.Box):
                 raise ValueError("generalized State-Dependent Exploration (gSDE) can only be used with continuous actions.")
@@ -207,53 +167,6 @@ class BaseAlgorithm(ABC):
                     np.isfinite(np.array([self.action_space.low, self.action_space.high]))
                 ), "Continuous action space must have a finite lower and upper bound"
 
-    @staticmethod
-    def _wrap_env(env: GymEnv, verbose: int = 0, monitor_wrapper: bool = True) -> VecEnv:
-        """ "
-        Wrap environment with the appropriate wrappers if needed.
-        For instance, to have a vectorized environment
-        or to re-order the image channels.
-
-        :param env:
-        :param verbose: Verbosity level: 0 for no output, 1 for indicating wrappers used
-        :param monitor_wrapper: Whether to wrap the env in a ``Monitor`` when possible.
-        :return: The wrapped environment.
-        """
-        if not isinstance(env, VecEnv):
-            # Patch to support gym 0.21/0.26 and gymnasium
-            env = _patch_env(env)
-            if not is_wrapped(env, Monitor) and monitor_wrapper:
-                if verbose >= 1:
-                    print("Wrapping the env with a `Monitor` wrapper")
-                env = Monitor(env)
-            if verbose >= 1:
-                print("Wrapping the env in a DummyVecEnv.")
-            env = DummyVecEnv([lambda: env])  # type: ignore[list-item, return-value]
-
-        # Make sure that dict-spaces are not nested (not supported)
-        check_for_nested_spaces(env.observation_space)
-
-        if not is_vecenv_wrapped(env, VecTransposeImage):
-            wrap_with_vectranspose = False
-            if isinstance(env.observation_space, spaces.Dict):
-                # If even one of the keys is a image-space in need of transpose, apply transpose
-                # If the image spaces are not consistent (for instance one is channel first,
-                # the other channel last), VecTransposeImage will throw an error
-                for space in env.observation_space.spaces.values():
-                    wrap_with_vectranspose = wrap_with_vectranspose or (
-                        is_image_space(space) and not is_image_space_channels_first(space)  # type: ignore[arg-type]
-                    )
-            else:
-                wrap_with_vectranspose = is_image_space(env.observation_space) and not is_image_space_channels_first(
-                    env.observation_space  # type: ignore[arg-type]
-                )
-
-            if wrap_with_vectranspose:
-                if verbose >= 1:
-                    print("Wrapping the env in a VecTransposeImage.")
-                env = VecTransposeImage(env)
-
-        return env
 
     @abstractmethod
     def _setup_model(self) -> None:
@@ -427,11 +340,12 @@ class BaseAlgorithm(ABC):
         # Avoid resetting the environment when calling ``.learn()`` consecutive times
         if reset_num_timesteps or self._last_obs is None:
             assert self.env is not None
-            self._last_obs = self.env.reset()  # type: ignore[assignment]
-            self._last_episode_starts = np.ones((self.env.num_envs,), dtype=bool)
+            self._last_obs,_ = self.env.reset()  # type: ignore[assignment]
+            #print(self._last_obs)
+            self._last_episode_starts = np.ones((1,), dtype=bool)
             # Retrieve unnormalized observation for saving into the buffer
-            if self._vec_normalize_env is not None:
-                self._last_original_obs = self._vec_normalize_env.get_original_obs()
+        else:
+            print("Horrible wrong. Debug")
 
         # Configure logger's outputs if no logger was passed
         if not self._custom_logger:
@@ -442,7 +356,7 @@ class BaseAlgorithm(ABC):
 
         return total_timesteps, callback
 
-    def _update_info_buffer(self, infos: List[Dict[str, Any]], dones: Optional[np.ndarray] = None) -> None:
+    def _update_info_buffer(self, infos: Dict[str, Any], done = None) -> None:
         """
         Retrieve reward, episode length, episode success and update the buffer
         if using Monitor wrapper or a GoalEnv.
@@ -453,14 +367,22 @@ class BaseAlgorithm(ABC):
         assert self.ep_info_buffer is not None
         assert self.ep_success_buffer is not None
 
-        if dones is None:
-            dones = np.array([False] * len(infos))
-        for idx, info in enumerate(infos):
-            maybe_ep_info = info.get("episode")
-            maybe_is_success = info.get("is_success")
+        if done is None:
+            done = False #np.array([False] * len(infos))
+        # for idx, info in enumerate(infos):
+        #     maybe_ep_info = info.get("episode")
+        #     maybe_is_success = info.get("is_success")
+        #     if maybe_ep_info is not None:
+        #         self.ep_info_buffer.extend([maybe_ep_info])
+        #     if maybe_is_success is not None and dones[idx]:
+        #         self.ep_success_buffer.append(maybe_is_success)
+        
+        if infos:
+            maybe_ep_info = infos.get("episode")
+            maybe_is_success = infos.get("is_success")
             if maybe_ep_info is not None:
                 self.ep_info_buffer.extend([maybe_ep_info])
-            if maybe_is_success is not None and dones[idx]:
+            if maybe_is_success is not None and done:
                 self.ep_success_buffer.append(maybe_is_success)
 
     def get_env(self):
@@ -470,41 +392,6 @@ class BaseAlgorithm(ABC):
         :return: The current environment
         """
         return self.env
-
-    # def set_env(self, env: GymEnv, force_reset: bool = True) -> None:
-    #     """
-    #     Checks the validity of the environment, and if it is coherent, set it as the current environment.
-    #     Furthermore wrap any non vectorized env into a vectorized
-    #     checked parameters:
-    #     - observation_space
-    #     - action_space
-
-    #     :param env: The environment for learning a policy
-    #     :param force_reset: Force call to ``reset()`` before training
-    #         to avoid unexpected behavior.
-    #         See issue https://github.com/DLR-RM/stable-baselines3/issues/597
-    #     """
-    #     # if it is not a VecEnv, make it a VecEnv
-    #     # and do other transformations (dict obs, image transpose) if needed
-    #     env = self._wrap_env(env, self.verbose)
-    #     assert env.num_envs == self.n_envs, (
-    #         "The number of environments to be set is different from the number of environments in the model: "
-    #         f"({env.num_envs} != {self.n_envs}), whereas `set_env` requires them to be the same. To load a model with "
-    #         f"a different number of environments, you must use `{self.__class__.__name__}.load(path, env)` instead"
-    #     )
-    #     # Check that the observation spaces match
-    #     check_for_correct_spaces(env, self.observation_space, self.action_space)
-    #     # Update VecNormalize object
-    #     # otherwise the wrong env may be used, see https://github.com/DLR-RM/stable-baselines3/issues/637
-    #     self._vec_normalize_env = unwrap_vec_normalize(env)
-
-    #     # Discard `_last_obs`, this will force the env to reset before training
-    #     # See issue https://github.com/DLR-RM/stable-baselines3/issues/597
-    #     if force_reset:
-    #         self._last_obs = None
-
-    #     self.n_envs = env.num_envs
-    #     self.env = env
 
     @abstractmethod
     def learn(
@@ -565,8 +452,8 @@ class BaseAlgorithm(ABC):
         set_random_seed(seed, using_cuda=self.device.type == th.device("cuda").type)
         self.action_space.seed(seed)
         # self.env is always a VecEnv
-        if self.env is not None:
-            self.env.seed(seed)
+        # if self.env is not None:
+        #     self.env.seed(seed)
 
     def set_parameters(
         self,
@@ -916,7 +803,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             device=device,
             use_sde=use_sde,
             sde_sample_freq=sde_sample_freq,
-            support_multi_env=True,
             monitor_wrapper=monitor_wrapper,
             seed=seed,
             stats_window_size=stats_window_size,
@@ -940,15 +826,15 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         self._setup_lr_schedule()
         self.set_random_seed(self.seed)
 
-        if self.rollout_buffer_class is None:
-            if isinstance(self.observation_space, spaces.Dict):
-                self.rollout_buffer_class = DictRolloutBuffer
-            else:
-                self.rollout_buffer_class = RolloutBuffer
+        # if self.rollout_buffer_class is None:
+        #     if isinstance(self.observation_space, spaces.Dict):
+        #         self.rollout_buffer_class = DictRolloutBuffer
+        #     else:
+        #         self.rollout_buffer_class = RolloutBuffer
+        self.rollout_buffer_class = RolloutBuffer
 
         self.rollout_buffer = self.rollout_buffer_class(
             self.n_steps,
-            self.observation_space,  # type: ignore[arg-type]
             self.action_space,
             device=self.device,
             gamma=self.gamma,
@@ -957,13 +843,13 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             **self.rollout_buffer_kwargs,
         )
         self.policy = self.policy_class(  # type: ignore[assignment]
-            self.observation_space, self.action_space, self.lr_schedule, use_sde=self.use_sde, **self.policy_kwargs
+            self.action_space, self.lr_schedule, use_sde=self.use_sde, **self.policy_kwargs
         )
         self.policy = self.policy.to(self.device)
 
     def collect_rollouts(
         self,
-        env: VecEnv,
+        env: GymEnv,
         callback: BaseCallback,
         rollout_buffer: RolloutBuffer,
         n_rollout_steps: int,
@@ -983,26 +869,28 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         """
         assert self._last_obs is not None, "No previous observation was provided"
         # Switch to eval mode (this affects batch norm / dropout)
+        self._last_obs,_ = self.env.reset()                    # start from initial AIG always, n_rollout_steps=18 for an episode
         self.policy.set_training_mode(False)
 
         n_steps = 0
         rollout_buffer.reset()
         # Sample new weights for the state dependent exploration
         if self.use_sde:
-            self.policy.reset_noise(env.num_envs)
+            self.policy.reset_noise(1)
 
         callback.on_rollout_start()
 
         while n_steps < n_rollout_steps:
             if self.use_sde and self.sde_sample_freq > 0 and n_steps % self.sde_sample_freq == 0:
                 # Sample a new noise matrix
-                self.policy.reset_noise(env.num_envs)
+                self.policy.reset_noise(1)
 
             with th.no_grad():
                 # Convert to pytorch tensor or to TensorDict
-                obs_tensor = obs_as_tensor(self._last_obs, self.device)
-                actions, values, log_probs = self.policy(obs_tensor)
-            actions = actions.cpu().numpy()
+                # obs_tensor = obs_as_tensor(self._last_obs, self.device)
+                #print("self._last_obs", self._last_obs)
+                actions, values, log_probs = self.policy(self._last_obs)
+            actions = actions.cpu().numpy()  
 
             # Rescale and perform action
             clipped_actions = actions
@@ -1017,16 +905,17 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                     # as we are sampling from an unbounded Gaussian distribution
                     clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
 
-            new_obs, rewards, dones, infos = env.step(clipped_actions)
+            new_obs, reward, done, truncated, info = env.step(clipped_actions[0]) # Assuming our environment will take one value, so 0th index
+            print(reward,done,n_steps)
 
-            self.num_timesteps += env.num_envs
+            self.num_timesteps += 1
 
             # Give access to local variables
             callback.update_locals(locals())
             if not callback.on_step():
                 return False
 
-            self._update_info_buffer(infos, dones)
+            self._update_info_buffer(info, done)
             n_steps += 1
 
             if isinstance(self.action_space, spaces.Discrete):
@@ -1035,33 +924,28 @@ class OnPolicyAlgorithm(BaseAlgorithm):
 
             # Handle timeout by bootstraping with value function
             # see GitHub issue #633
-            for idx, done in enumerate(dones):
-                if (
-                    done
-                    and infos[idx].get("terminal_observation") is not None
-                    and infos[idx].get("TimeLimit.truncated", False)
-                ):
-                    terminal_obs = self.policy.obs_to_tensor(infos[idx]["terminal_observation"])[0]
-                    with th.no_grad():
-                        terminal_value = self.policy.predict_values(terminal_obs)[0]  # type: ignore[arg-type]
-                    rewards[idx] += self.gamma * terminal_value
+            # for idx, done in enumerate(dones):
+            if done and truncated:
+                with th.no_grad():
+                    terminal_value = self.policy.predict_values(new_obs)  # type: ignore[arg-type]
+                reward += self.gamma * terminal_value
 
             rollout_buffer.add(
                 self._last_obs,  # type: ignore[arg-type]
                 actions,
-                rewards,
+                reward,
                 self._last_episode_starts,  # type: ignore[arg-type]
                 values,
                 log_probs,
             )
             self._last_obs = new_obs  # type: ignore[assignment]
-            self._last_episode_starts = dones
+            self._last_episode_starts = done
 
         with th.no_grad():
             # Compute value for the last timestep
-            values = self.policy.predict_values(obs_as_tensor(new_obs, self.device))  # type: ignore[arg-type]
+            value = self.policy.predict_values(new_obs)  # type: ignore[arg-type]
 
-        rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
+        rollout_buffer.compute_returns_and_advantage(last_values=value, dones=done)
 
         callback.update_locals(locals())
 
