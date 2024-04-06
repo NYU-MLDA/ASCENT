@@ -896,7 +896,11 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 # Convert to pytorch tensor or to TensorDict
                 # obs_tensor = obs_as_tensor(self._last_obs, self.device)
                 #print("self._last_obs", self._last_obs)
-                actions, values, log_probs = self.policy(self._last_obs)
+                actions, values, log_probs,prob_dist,entropy_val,features = self.policy(self._last_obs)
+                log_probs+=1e-6
+                print(f"Action:{actions.item()}, \nvalue:{values.item()}, \naction distrib:{prob_dist.cpu().numpy()}, \
+                    \nentropy:{entropy_val.item()},\nLSTM: {features.cpu().numpy()[0][:5]}")
+                print('-----------------------------------------------------------')
             actions = actions.cpu().numpy()  
 
             # Rescale and perform action

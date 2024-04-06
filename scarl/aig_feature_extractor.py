@@ -47,20 +47,44 @@ class AIGStateEncoder(torch.nn.Module):
         self.norm1 = BatchNorm(hidden_channels)
         self.norm2 = BatchNorm(hidden_channels)
         # Use a global sort aggregation:
+        self.synthesis_transform_feature_dim=1
+        self.num_layers = 2
+        self.hidden_size = 64
         self.global_pool_1 = aggr.MLPAggregation(hidden_channels,hidden_channels,max_num_elements=500,num_layers=1)
         self.global_pool_2 = aggr.GRUAggregation(hidden_channels,hidden_channels)
+        self.lstm = nn.LSTM(self.synthesis_transform_feature_dim, hidden_size=self.hidden_size, num_layers=self.num_layers, batch_first=True)
         #self.global_pool_3 = aggr.SetTransformerAggregation(hidden_channels,num_seed_points=1,heads=1)
-        self.linear_layer = torch.nn.Linear(hidden_channels*2, hidden_channels*2)
-        self.features_dim = hidden_channels*2
+        #self.linear_layer = torch.nn.Linear(hidden_channels*2, hidden_channels*2)
+        self.linear_layer = torch.nn.Linear(self.hidden_size,self.hidden_size)
+        torch.nn.init.xavier_uniform_(self.linear_layer.weight.data)
+        self.init_weights()
+        self.features_dim = self.hidden_size
+        
+    def init_weights(self):
+        for name, param in self.lstm.named_parameters():
+            if 'weight' in name:
+                torch.nn.init.orthogonal_(param)
 
     def forward(self,batched_data):
-        x = batched_data.x
-        edge_index = batched_data.edge_index
-        batch = batched_data.batch
-        x = self.node_encoder(x)
-        x = F.relu(self.norm1(self.conv1(x, edge_index)))
-        x = F.relu(self.norm2(self.conv2(x, edge_index)))
-        #pooled_feature = torch.cat([self.global_pool_1(x, batch),self.global_pool_2(x,batch),self.global_pool_3(x,batch)],dim=1)
-        pooled_feature = torch.cat([self.global_pool_1(x, batch),self.global_pool_2(x,batch)],dim=1)
-        graph_feature = self.linear_layer(pooled_feature)
-        return graph_feature
+        # x = batched_data.x
+        # edge_index = batched_data.edge_index
+        # batch = batched_data.batch
+        # x = self.node_encoder(x)
+        # x = F.relu(self.norm1(self.conv1(x, edge_index)))
+        # x = F.relu(self.norm2(self.conv2(x, edge_index)))
+        # #pooled_feature = torch.cat([self.global_pool_1(x, batch),self.global_pool_2(x,batch),self.global_pool_3(x,batch)],dim=1)
+        # pooled_feature = torch.cat([self.global_pool_1(x, batch),self.global_pool_2(x,batch)],dim=1)
+        # graph_feature = self.linear_layer(pooled_feature)
+        # return graph_feature
+        x = batched_data.recipe_encoding
+        #h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
+        # Initialize cell state
+        #c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
+        
+        # Forward propagate LSTM
+        #out, _ = self.lstm(x, (h0, c0))  # out: tensor of shape (batch_size, seq_length, hidden_size)
+        out, _ = self.lstm(x, None)
+        
+        # Decode the hidden state of the last time step
+        out = self.linear_layer(out[:, -1, :])
+        return out

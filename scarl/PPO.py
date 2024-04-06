@@ -81,20 +81,20 @@ class PPO(OnPolicyAlgorithm):
         self,
         policy: Union[str, Type[ActorCriticPolicy]],
         env: Union[GymEnv, str],
-        learning_rate: Union[float, Schedule] = 3e-4,
+        learning_rate: Union[float, Schedule] = 1e-2,
         n_steps: int = 18, # Rollout should be of Depth 18. Each epoch have 18 samples to train on. timesteps = 900, so 50 epochs training.
         batch_size: int = 1,
-        n_epochs: int = 10,
+        n_epochs: int = 20,
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
         clip_range: Union[float, Schedule] = 0.2,
         clip_range_vf: Union[None, float, Schedule] = None,
         normalize_advantage: bool = False,   # Normalize advantage is false as batchsize is set 1 now.
-        ent_coef: float = 0.0,
+        ent_coef: float = 0.5,
         vf_coef: float = 0.5,
         max_grad_norm: float = 0.5,
-        use_sde: bool = False,
-        sde_sample_freq: int = -1,
+        use_sde: bool = False, #use_sde: bool = False,
+        sde_sample_freq: int = -1, #sde_sample_freq: int = -1,
         rollout_buffer_class: Optional[Type[RolloutBuffer]] = None,
         rollout_buffer_kwargs: Optional[Dict[str, Any]] = None,
         target_kl: Optional[float] = None,
@@ -277,6 +277,8 @@ class PPO(OnPolicyAlgorithm):
 
                 # Optimization step
                 self.policy.optimizer.zero_grad()
+                #loss_gradient = th.autograd.grad(loss, self.policy.parameters(), retain_graph=True,allow_unused=True)
+                #loss_gradient_magnitude = th.norm(loss_gradient[0])
                 loss.backward()
                 # Clip grad norm
                 th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
@@ -295,6 +297,7 @@ class PPO(OnPolicyAlgorithm):
         self.logger.record("train/approx_kl", np.mean(approx_kl_divs))
         self.logger.record("train/clip_fraction", np.mean(clip_fractions))
         self.logger.record("train/loss", loss.item())
+        #self.logger.record("train/gradient_magnitude",loss_gradient_magnitude.item())
         self.logger.record("train/explained_variance", explained_var)
         if hasattr(self.policy, "log_std"):
             self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())
