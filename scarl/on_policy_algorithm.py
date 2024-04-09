@@ -45,7 +45,7 @@ from stable_baselines3.common.utils import obs_as_tensor, safe_mean
 from buffers import RolloutBuffer
 from stable_baselines3.common.callbacks import BaseCallback
 from actor_critic_policy import ActorCriticPolicy
-
+from collections import OrderedDict
 
 
 SelfBaseAlgorithm = TypeVar("SelfBaseAlgorithm", bound="BaseAlgorithm")
@@ -825,6 +825,8 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         self.max_grad_norm = max_grad_norm
         self.rollout_buffer_class = rollout_buffer_class
         self.rollout_buffer_kwargs = rollout_buffer_kwargs or {}
+        self.backprop_reward = {}
+        self.mcts_based_exploration = 1
 
         if _init_setup_model:
             self._setup_model()
@@ -853,6 +855,51 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             self.action_space, self.lr_schedule, use_sde=self.use_sde, **self.policy_kwargs
         )
         self.policy = self.policy.to(self.device)
+        
+    def update_state_reward_dict(self,state,reward):
+        if state in self.backprop_reward:
+            self.backprop_reward[state][1]+= reward
+            self.backprop_reward[state][2]+=1
+            self.backprop_reward[state][0] = self.backprop_reward[state][1]/self.backprop_reward[state][2]
+        else:
+            self.backprop_reward[state] = [reward,reward,1]
+            
+        return self.backprop_reward[state][0]
+        
+    def backpropagate_rewards(self,action_list,terminal_reward):
+        action_seq = [str(action_list[i][0]) for i,_ in enumerate(action_list)]
+        reward_seq = []
+        
+        for idx in range(1,len(action_seq)+1):
+            state = "_".join(action_seq[:idx])
+            state_reward =self.update_state_reward_dict(state,terminal_reward)
+            reward_seq.append(state_reward)
+            
+        return reward_seq
+    
+    def mcts_based_action_selection(self,action_state_information,agent_probability_distribution):
+        action_seq = [str(action_state_information[i][0]) for i,_ in enumerate(action_state_information)]
+        state = "_".join(action_seq)
+        if state in self.backprop_reward:
+            child_states = OrderedDict({(i,state+"_"+str(i)) for i in range(self.env.n_actions)})
+            child_q_scores = []
+            child_actions = []
+            for idx,c_s in child_states.items():
+                if c_s in self.backprop_reward:
+                    child_actions.append(idx)
+                    child_q_scores.append(self.backprop_reward[c_s][0] + \
+                        (np.sqrt(2)*agent_probability_distribution[0][idx]*np.sqrt(self.backprop_reward[state][2]/self.backprop_reward[c_s][2])))
+                else:
+                    action_to_take = idx
+                    break
+            if len(child_q_scores)==len(child_states):
+                action_to_take = child_actions[np.argmax(np.array(child_q_scores))]
+        else:
+            action_to_take = np.argmax(agent_probability_distribution[0])
+
+        action_tensor = th.tensor([action_to_take]).to(self.device)
+        log_prob = th.tensor([th.log(th.tensor(agent_probability_distribution[0][action_to_take]))]).to(self.device)
+        return action_tensor,log_prob
 
     def collect_rollouts(
         self,
@@ -886,6 +933,14 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             self.policy.reset_noise(1)
 
         callback.on_rollout_start()
+        
+        obs_list = []
+        actions_list = []
+        action_state_information = []
+        #reward_list = []
+        last_episode_start_list = []
+        values_list = []
+        log_probs_list = []
 
         while n_steps < n_rollout_steps:
             if self.use_sde and self.sde_sample_freq > 0 and n_steps % self.sde_sample_freq == 0:
@@ -900,7 +955,15 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 log_probs+=1e-6
                 print(f"Action:{actions.item()}, \nvalue:{values.item()}, \naction distrib:{prob_dist.cpu().numpy()}, \
                     \nentropy:{entropy_val.item()},\nLSTM: {features.cpu().numpy()[0][:5]}")
+                
+
+
+            if self.mcts_based_exploration:
+                prob_dist_numpy = prob_dist.data.cpu().numpy()
+                actions,log_probs = self.mcts_based_action_selection(action_state_information,prob_dist_numpy)
+                print(f"MCTS Action:{actions}")
                 print('-----------------------------------------------------------')
+                 
             actions = actions.cpu().numpy()  
 
             # Rescale and perform action
@@ -936,21 +999,47 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             # Handle timeout by bootstraping with value function
             # see GitHub issue #633
             # for idx, done in enumerate(dones):
+            # if done and truncated:
             if done and truncated:
                 with th.no_grad():
                     terminal_value = self.policy.predict_values(new_obs)  # type: ignore[arg-type]
                 reward += self.gamma * terminal_value
+                
+            if done:
+                #print(len(actions_list))
+                action_seq = [syn[0] for syn in actions_list]+[actions[0]]
+                #print(len(action_seq))
+                reward_list = self.backpropagate_rewards(action_seq,reward)
+                print(reward_list)
 
-            rollout_buffer.add(
-                self._last_obs,  # type: ignore[arg-type]
-                actions,
-                reward,
-                self._last_episode_starts,  # type: ignore[arg-type]
-                values,
-                log_probs,
-            )
+            # rollout_buffer.add(
+            #     self._last_obs,  # type: ignore[arg-type]
+            #     actions,
+            #     reward,
+            #     self._last_episode_starts,  # type: ignore[arg-type]
+            #     values,
+            #     log_probs,
+            # )
+            action_state_information.append(actions[0])
+            obs_list.append(self._last_obs)
+            actions_list.append(actions)
+            last_episode_start_list.append(self._last_episode_starts)
+            values_list.append(values)
+            log_probs_list.append(log_probs)
             self._last_obs = new_obs  # type: ignore[assignment]
             self._last_episode_starts = done
+            
+        for i in range(n_rollout_steps):
+            rollout_buffer.add(
+                obs_list[i],  # type: ignore[arg-type]
+                actions_list[i],
+                reward_list[i],
+                last_episode_start_list[i],  # type: ignore[arg-type]
+                values_list[i],
+                log_probs_list[i],
+            )
+            
+        print(reward_list)
 
         with th.no_grad():
             # Compute value for the last timestep
@@ -1015,7 +1104,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         callback.on_training_start(locals(), globals())
 
         assert self.env is not None
-
+        training_period=30 #train after 30 rollouts
         while self.num_timesteps < total_timesteps:
             continue_training = self.collect_rollouts(self.env, callback, self.rollout_buffer, n_rollout_steps=self.n_steps)
 
@@ -1030,7 +1119,8 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 assert self.ep_info_buffer is not None
                 self._dump_logs(iteration)
 
-            self.train()
+            if self.num_timesteps % training_period == 0:
+                self.train()
 
         callback.on_training_end()
 

@@ -34,7 +34,7 @@ from stable_baselines3.common.torch_layers import (
 )
 from stable_baselines3.common.type_aliases import Schedule
 from stable_baselines3.common.utils import get_device
-from aig_feature_extractor import AIGStateEncoder
+from aig_feature_extractor import AIGStateEncoder,RLValueNet
 
 SelfBaseModel = TypeVar("SelfBaseModel", bound="BaseModel")
 
@@ -498,7 +498,8 @@ class ActorCriticPolicy(BasePolicy):
         else:
             raise NotImplementedError(f"Unsupported distribution '{self.action_dist}'.")
 
-        self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 1)
+        #self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 1)
+        self.value_net = RLValueNet(self.mlp_extractor.latent_dim_vf)
         # Init weights: use orthogonal initialization
         # with small initial weight for the output
         if self.ortho_init:
@@ -510,7 +511,7 @@ class ActorCriticPolicy(BasePolicy):
                 self.features_extractor: np.sqrt(2),
                 self.mlp_extractor: np.sqrt(2),
                 self.action_net: 0.01,
-                self.value_net: 1,
+                #self.value_net: 1, # Not needed to go orthogonal initialization. Xavier initialization + tanh should work for value net
             }
             if not self.share_features_extractor:
                 # Note(antonin): this is to keep SB3 results

@@ -400,7 +400,8 @@ class Synthesizor(gym.Env):
         fileBaseName = os.path.splitext(os.path.basename(aigState))[0]
         _,seq,stepNum = fileBaseName.split('+')
         stepNum = int(stepNum.split('step')[-1])
-        recipe_encoding = [0]+[int(x) for x in seq.split("_")[1:]]
+        #recipe_encoding = [0]+[int(x) for x in seq.split("_")[1:]]+[0 for _ in range(self.ep_length-stepNum)]
+        recipe_encoding = [0]+[int(x) for x in seq.split("_")[1:]]#+[0 for _ in range(self.ep_length-stepNum)]
         
         self._abc.read(aigState)
         data = {}
