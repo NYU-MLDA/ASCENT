@@ -26,8 +26,10 @@ from stable_baselines3.common.distributions import (
     Distribution,
     MultiCategoricalDistribution,
     StateDependentNoiseDistribution,
-    make_proba_distribution,
 )
+
+from distributions import make_proba_distribution,SCARL_Categorical_Distribution
+
 from stable_baselines3.common.preprocessing import get_action_dim, is_image_space, maybe_transpose, preprocess_obs
 from stable_baselines3.common.torch_layers import (
     MlpExtractor,
@@ -423,7 +425,7 @@ class ActorCriticPolicy(BasePolicy):
         self.dist_kwargs = dist_kwargs
 
         # Action distribution
-        self.action_dist = make_proba_distribution(action_space, use_sde=use_sde, dist_kwargs=dist_kwargs)
+        self.action_dist = make_proba_distribution(action_space, use_sde=use_sde, use_two_linear_layers=True,dist_kwargs=dist_kwargs)
 
         self._build(lr_schedule)
 
@@ -493,7 +495,7 @@ class ActorCriticPolicy(BasePolicy):
             self.action_net, self.log_std = self.action_dist.proba_distribution_net(
                 latent_dim=latent_dim_pi, latent_sde_dim=latent_dim_pi, log_std_init=self.log_std_init
             )
-        elif isinstance(self.action_dist, (CategoricalDistribution, MultiCategoricalDistribution, BernoulliDistribution)):
+        elif isinstance(self.action_dist, (CategoricalDistribution, MultiCategoricalDistribution, BernoulliDistribution,SCARL_Categorical_Distribution)):
             self.action_net = self.action_dist.proba_distribution_net(latent_dim=latent_dim_pi)
         else:
             raise NotImplementedError(f"Unsupported distribution '{self.action_dist}'.")
