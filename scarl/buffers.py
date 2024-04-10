@@ -436,7 +436,8 @@ class RolloutBuffer(BaseBuffer):
             self.advantages[step] = last_gae_lam
         # TD(lambda) estimator, see Github PR #375 or "Telescoping in TD(lambda)"
         # in David Silver Lecture 4: https://www.youtube.com/watch?v=PnHCvfgC_ZA
-        self.returns = self.advantages + self.values
+        #self.returns = self.advantages + self.values
+        self.returns = self.values
 
     def add(
         self,

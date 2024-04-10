@@ -867,7 +867,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         return self.backprop_reward[state][0]
         
     def backpropagate_rewards(self,action_list,terminal_reward):
-        action_seq = [str(action_list[i][0]) for i,_ in enumerate(action_list)]
+        action_seq = ["0"]+[str(action_list[i][0]) for i,_ in enumerate(action_list)]
         reward_seq = []
         
         for idx in range(1,len(action_seq)+1):
@@ -878,7 +878,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         return reward_seq
     
     def mcts_based_action_selection(self,action_state_information,agent_probability_distribution):
-        action_seq = [str(action_state_information[i][0]) for i,_ in enumerate(action_state_information)]
+        action_seq = ["0"]+[str(action_state_information[i][0]) for i,_ in enumerate(action_state_information)]
         state = "_".join(action_seq)
         if state in self.backprop_reward:
             child_states = OrderedDict({(i,state+"_"+str(i)) for i in range(self.env.n_actions)})
@@ -895,7 +895,8 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             if len(child_q_scores)==len(child_states):
                 action_to_take = child_actions[np.argmax(np.array(child_q_scores))]
         else:
-            action_to_take = np.argmax(agent_probability_distribution[0])
+            #action_to_take = np.argmax(agent_probability_distribution[0])
+            action_to_take = np.random.choice(self.env.n_actions)
 
         action_tensor = th.tensor([action_to_take]).to(self.device)
         log_prob = th.tensor([th.log(th.tensor(agent_probability_distribution[0][action_to_take]))]).to(self.device)
@@ -1104,7 +1105,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         callback.on_training_start(locals(), globals())
 
         assert self.env is not None
-        training_period=30 #train after 30 rollouts
+        training_period=2 #train after 30 rollouts
         while self.num_timesteps < total_timesteps:
             continue_training = self.collect_rollouts(self.env, callback, self.rollout_buffer, n_rollout_steps=self.n_steps)
 
