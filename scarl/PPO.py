@@ -84,7 +84,7 @@ class PPO(OnPolicyAlgorithm):
         learning_rate: Union[float, Schedule] = 5e-3,
         n_steps: int = 18, # Rollout should be of Depth 18. Each epoch have 18 samples to train on. timesteps = 900, so 50 epochs training.
         batch_size: int = 1,
-        n_epochs: int = 100,
+        n_epochs: int = 250,
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
         clip_range: Union[float, Schedule] = 0.2,
@@ -227,8 +227,12 @@ class PPO(OnPolicyAlgorithm):
                 ratio = th.exp(log_prob - rollout_data.old_log_prob)
 
                 # clipped surrogate loss
-                policy_loss_1 = advantages * ratio
-                policy_loss_2 = advantages * th.clamp(ratio, 1 - clip_range, 1 + clip_range)
+                # policy_loss_1 = advantages * ratio
+                # policy_loss_2 = advantages * th.clamp(ratio, 1 - clip_range, 1 + clip_range)
+                # policy_loss = -th.min(policy_loss_1, policy_loss_2).mean()
+                
+                policy_loss_1 = ratio
+                policy_loss_2 = th.clamp(ratio, 1 - clip_range, 1 + clip_range)
                 policy_loss = -th.min(policy_loss_1, policy_loss_2).mean()
 
                 # Logging
