@@ -798,6 +798,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         verbose: int = 0,
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
+        agent_recommendation_enabled = True,
         _init_setup_model: bool = True,
         supported_action_spaces: Optional[Tuple[Type[spaces.Space], ...]] = None,
     ):
@@ -827,6 +828,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         self.rollout_buffer_kwargs = rollout_buffer_kwargs or {}
         self.backprop_reward = {}
         self.mcts_based_exploration = 1
+        self.agent_recommendation_enabled = agent_recommendation_enabled
 
         if _init_setup_model:
             self._setup_model()
@@ -885,10 +887,11 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             child_q_scores = []
             child_actions = []
             for idx,c_s in child_states.items():
+                biasing_factor = agent_probability_distribution[0][idx] if self.agent_recommendation_enabled else 1.0
                 if c_s in self.backprop_reward:
                     child_actions.append(idx)
                     child_q_scores.append(self.backprop_reward[c_s][0] + \
-                        (np.sqrt(2)*agent_probability_distribution[0][idx]*np.sqrt(self.backprop_reward[state][2]/self.backprop_reward[c_s][2])))
+                        (np.sqrt(2)*biasing_factor*np.sqrt(self.backprop_reward[state][2]/self.backprop_reward[c_s][2])))
                 else:
                     action_to_take = idx
                     break

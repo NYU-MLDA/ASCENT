@@ -103,6 +103,7 @@ class PPO(OnPolicyAlgorithm):
         policy_kwargs: Optional[Dict[str, Any]] = None,
         verbose: int = 0,
         seed: Optional[int] = None,
+        agent_recommendation_enabled: bool = True,
         device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
     ):
@@ -126,6 +127,7 @@ class PPO(OnPolicyAlgorithm):
             verbose=verbose,
             device=device,
             seed=seed,
+            agent_recommendation_enabled=agent_recommendation_enabled,
             _init_setup_model=False,
             supported_action_spaces=(
                 spaces.Box,
