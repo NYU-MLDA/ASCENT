@@ -437,7 +437,7 @@ class RolloutBuffer(BaseBuffer):
         # TD(lambda) estimator, see Github PR #375 or "Telescoping in TD(lambda)"
         # in David Silver Lecture 4: https://www.youtube.com/watch?v=PnHCvfgC_ZA
         #self.returns = self.advantages + self.values
-        self.returns = self.values
+        self.returns = self.rewards
 
     def add(
         self,
