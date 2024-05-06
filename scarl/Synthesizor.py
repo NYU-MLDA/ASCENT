@@ -22,6 +22,9 @@ import networkx as nx
 from zipfile import ZipFile
 import zipfile
 from gymnasium.spaces import Dict
+import xgboost as xgb
+from xgboost import DMatrix, train
+import pandas as pd
 
 class Synthesizor(gym.Env):
     def __init__(self, args):
@@ -39,6 +42,8 @@ class Synthesizor(gym.Env):
         self.generate_synthesis_id_2_cmd_mapping()
         self.define_action_space()
         self.num_envs=1 # Tackle VecEnv num_envs dummy
+        self.model = xgb.Booster()
+        self.model.load_model(args.xg_boost)
         
 
     def set_aig_node_type_mapping(self):
@@ -117,7 +122,7 @@ class Synthesizor(gym.Env):
         area = float(os.popen(area_parsing_cmd).read().strip())
         return area
         
-    def checkFilePathsAndCreateAig_only_yosys(self):
+    def checkFilePathsAndCreateAig(self):
         if not osp.exists(self.verilog_file):
             self.logFile.errorInfo(f"{self.verilog_file} not found")
             exit(1)
@@ -158,57 +163,6 @@ class Synthesizor(gym.Env):
         os.mkdir(self.aig_dump_dir)
         self.origAIG = osp.join(self.aig_dump_dir, "orig_aig+0+step0.aig")
         shutil.copy(origAIGPath, self.origAIG)
-        
-    def checkFilePathsAndCreateAig(self):
-        if not osp.exists(self.verilog_file):
-            self.logFile.errorInfo(f"{self.verilog_file} not found")
-            exit(1)
-            
-        if not osp.exists(self.lib):
-            self.logFile.errorInfo(f"{self.lib} not found")
-            exit(1)
-            
-        if not osp.exists(self.root_dump_dir):
-            self.logFile.errorInfo(f"{self.root_dump_dir} not found")
-            exit(1)
-
-        # Create appropriate file and scripts paths to extract original AIG
-        origSynthesisDir = osp.join(self.root_dump_dir, "orig_synthesis")
-        if osp.exists(origSynthesisDir):
-            shutil.rmtree(origSynthesisDir)
-        os.mkdir(origSynthesisDir)
-        abcScript = osp.join(origSynthesisDir, "abc.script")
-        yosysScript = osp.join(origSynthesisDir, "yosys_script.tcl")
-        synthesizedVerilogNetlist = osp.join(origSynthesisDir, "synthesized_netlist.v")
-        origAIGPath = osp.join(origSynthesisDir, "orig_aig.aig")
-        
-        
-        # compress2rs synthesis vector and create the scripts file
-        compress2rs_vec = [12,4,2,5,0,6,12,7,2,8,3,9,12,10,1,11,3,12]
-        self.create_yosys_script_file(yosysScript, abcScript,synthesizedVerilogNetlist)
-        self.create_abc_script_file(abcScript,compress2rs_vec,origAIGPath)
-        
-        # Generate the original AIG file
-        yosysRunLogFile = osp.join(origSynthesisDir, "yosys_syn.log")
-        yosys_synthesis_cmd = f'yosys -s {yosysScript} -l {yosysRunLogFile} > /dev/null 2>&1'
-        os.system(yosys_synthesis_cmd)
-        #self.c2rs_area = self.get_area_from_synthesis_logfile(yosysRunLogFile)
-        
-        # Create the copy of original AIG file in aig dump folder
-        if osp.exists(self.aig_dump_dir):
-            shutil.rmtree(self.aig_dump_dir)
-        os.mkdir(self.aig_dump_dir)
-        self.origAIG = osp.join(self.aig_dump_dir, "orig_aig+0+step0.aig")
-        shutil.copy(origAIGPath, self.origAIG)
-        
-        if osp.exists(yosysRunLogFile):
-            os.remove(yosysRunLogFile)
-        c2rs_cmd = self.generate_synthesis_cmd(compress2rs_vec,endl=";")
-        abcRunCmd = "yosys-abc -c \"read "+self.origAIG+";"+c2rs_cmd+"read_lib "+self.lib+"; map ; topo;stime \" > "+yosysRunLogFile
-        os.system(abcRunCmd)
-        with open(yosysRunLogFile,'r') as f:
-            areaInformation = re.findall('[a-zA-Z0-9.]+',f.readlines()[-1])
-            self.c2rs_adpVal = float(areaInformation[-9])*float(areaInformation[-4])
         
         
     def get_state_from_aig(self,aigState):
@@ -317,7 +271,7 @@ class Synthesizor(gym.Env):
         nextState = self.get_state_from_aig(next_aig_state)
         return nextState
     
-    def get_reward_only_yosys(self,state):
+    def get_reward(self,state):
         """_summary_
 
         Args:
@@ -355,45 +309,40 @@ class Synthesizor(gym.Env):
         yosysRunLogFile = osp.join(rewardSynthesisDir, "yosys_syn.log")
         yosys_synthesis_cmd = f'yosys -s {yosysScript} -l {yosysRunLogFile} > /dev/null 2>&1'
         os.system(yosys_synthesis_cmd)
-        area = self.get_area_from_synthesis_logfile(yosysRunLogFile)
-        reward = max(-1,(1-(area/self.c2rs_area)))
-        return reward
+        # area = self.get_area_from_synthesis_logfile(yosysRunLogFile)
+        # reward = max(-1,(1-(area/self.c2rs_area)))
+        # return reward
     
-    def get_reward(self,state):
-        """_summary_
+        hvt_cells_count, lvt_cells_count, hvt_cells_area, lvt_cells_area = self.get_area_percentage()
 
-        Args:
-            state (nxDigraph): The function expects the state information in the form of AIG DiGraph
-            or PyG Geometric Data dictionary. Use "aig_state" attribute to retrieve the path of terminal
-            state AIG, extract the recipe to write down the abc.script.
+        X_test = [float(hvt_cells_area), float(lvt_cells_area)]
+        df = pd.DataFrame([X_test], columns=['HVT', 'LVT'])
+        dtest = DMatrix(df)
 
-        Returns:
-            float : The reward should be designed on post synthesized verilog file. e.g. area, PT score etc.
-        """
-        if isinstance(state,nx.DiGraph):
-            state = state.graph['aig_state']
-        elif isinstance(state,dict):
-            state = state['aig_state']
+        predictions = self.model.predict(dtest)
+
+        norm_pt = -1 + predictions/5000
+
+        reward = float(norm_pt)
+        return reward
+
+    @staticmethod
+    def get_area_percentage():
+
+        os.system('/home/jb7410/aes_static_3/synth/run')
+
+        with open('/home/jb7410/aes_static_3/synth/aes128_table_ecb_22nm/reports_0_0_0/report_threshold.rpt', 'r') as file:
+            data = file.read()
+
+        matches = re.findall(r'HVt\s+\d+\s+\((\d+\.\d+)%\).*?LVt\s+\d+\s+\((\d+\.\d+)%\).*?HVt\s+\d+\.\d+\s+\((\d+\.\d+)%\).*?LVt\s+\d+\.\d+\s+\((\d+\.\d+)%\)', data, re.DOTALL)
+
+        if matches:
+            hvt_cells_count, lvt_cells_count, hvt_cells_area, lvt_cells_area = matches[0]
         else:
-            print("Instance type unknown. Exiting")
-            exit(1)
-        _,prefix,_ = osp.splitext(osp.basename(state))[0].split("+")
-        rl_synthesisVec = [int(synthid) for synthid in prefix.split("_")[1:]] # The first one is always 0
-        
-        
-        # Create appropriate file and scripts paths to extract original AIG
-        rewardSynthesisDir = osp.join(self.root_dump_dir, "reward_synthesis")
-        if not osp.exists(rewardSynthesisDir):
-            os.mkdir(rewardSynthesisDir)
-        yosysRunLogFile = osp.join(rewardSynthesisDir, "yosys_syn.log")
-        abcRunCmd = "yosys-abc -c \"read "+state+"; read_lib "+self.lib+"; map ; topo;stime \" > "+yosysRunLogFile
-        os.system(abcRunCmd)
-        with open(yosysRunLogFile,'r') as f:
-            areaInformation = re.findall('[a-zA-Z0-9.]+',f.readlines()[-1])
-            adpVal = float(areaInformation[-9])*float(areaInformation[-4])
-            reward = max(-1,(1-(adpVal/self.c2rs_adpVal)))
-            print(f"Area:{float(areaInformation[-9])},Delay:{float(areaInformation[-4])},Reward:{reward}")
-            return reward
+            print("Error encountered in HVT/LVT cell information extraction. Exiting!")
+            exit(2)
+
+        return hvt_cells_count, lvt_cells_count, hvt_cells_area, lvt_cells_area
         
     
     def extract_state_from_aig(self,aigState):

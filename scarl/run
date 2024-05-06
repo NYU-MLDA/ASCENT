@@ -1,0 +1,6 @@
+#!/usr/bin/tcsh
+
+setenv SYNTH_RUN /home/jb7410/aes_static_3/synth/aes128_table_ecb_22nm
+setenv VERILOG_FILE /home/jb7410/TEST_scarl/scarl/dump/trial1/reward_synthesis/synthesized_netlist.v
+
+dc_shell-t -no_gui -64bit -output_log_file ${SYNTH_RUN}/synth.log -x "source -echo -verbose ./dc_synth.tcl"
